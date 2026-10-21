@@ -3,48 +3,67 @@ Population genomic workflow in UPPMAX for ancient DNA: LD pruning, projected sma
 
 # Population Structure Inference Pipeline (Part 2)
 
-This workflow outlines the analytical steps performed on the harmonized human genomic dataset to infer the ancestral background and chronological placement of 25 uncharacterized archaeological and modern individuals (**TAPAS**), co-analyzed with ancient and modern West Eurasian reference panels.
+This workflow outlines the population genomics pipeline implemented on UPPMAX (Pelle cluster) to infer the ancestry and temporal context of the 25 unknown samples (TAPAS dataset), co-analyzed with ancient and modern West Eurasian reference panels based on Olalde et al. (2019).
 
 ---
 
-## Pipeline Flowchart
+## Horizontal End-to-End Pipeline Diagram
 
 ```mermaid
-flowchart TD
-    subgraph S1["1. Linkage Disequilibrium Pruning"]
-        A["COMPLETE_DATASET_geno0.99<br/>(597,569 SNPs, 844 individuals)"] --> B["PLINK: --indep-pairwise 10 10 0.5"]
-        B --> C["plink.prune.in<br/>(126,175 correlated variants pruned)"]
-        C --> D["COMPLETE_DATASET_geno0.99_LD<br/>(471,394 independent SNPs | 68.42% call rate)"]
+flowchart LR
+    %% Subgraph 1: LD Pruning
+    subgraph S1["1. LD Pruning & Quality Filtering"]
+        direction TB
+        A["COMPLETE_DATASET_geno0.99<br/>• 597,569 SNPs<br/>• 844 individuals<br/>• 57.65% call rate"] --> B["PLINK v1.9<br/>--indep-pairwise 10 10 0.5<br/>(Window: 10, Step: 10, r²: 0.5)"]
+        B --> C["Marker Exclusion<br/>• 126,175 SNPs pruned (plink.prune.out)<br/>• 471,394 SNPs retained (plink.prune.in)"]
+        C --> D["COMPLETE_DATASET_geno0.99_LD<br/>• Independent marker set<br/>• Call rate improved to 68.42%"]
     end
 
-    subgraph S2["2. Conventional PCA Technical Control"]
-        D --> E["Conventional PCA (PLINK --pca 10)"]
-        E --> F["Severe Shrinkage Bias Detected<br/>Ancient & TAPAS samples falsely collapse toward (0,0)"]
+    %% Subgraph 2: Conventional PCA Evaluation
+    subgraph S2["2. Conventional PCA (Quality Control)"]
+        direction TB
+        D --> E["PLINK v1.9<br/>--pca 10<br/>(Simultaneous SVD across all 844 samples)"]
+        E --> F["Diagnostic Scree & Bivariate Plots<br/>• PC1: 24.7% variance<br/>• PC2: 17.1% variance"]
+        F --> G["Severe Shrinkage Bias Identified<br/>• Implicit zero-imputation of missing data<br/>• Ancient & TAPAS pull toward origin (0,0)<br/>• Unprojected PCA rejected for aDNA"]
     end
 
+    %% Subgraph 3: Projected PCA
     subgraph S3["3. Projected PCA (smartpca)"]
-        D --> G["Transposed File Generation (.tped / .tfam)"]
-        G --> H["Population Scaffold Lists:<br/>• MODERN_SAMPLES.txt (N=625, orthogonal basis)<br/>• UNKNOWN_SAMPLES.txt (Ancient + TAPAS)"]
-        H --> I["smartpca (EIGENSOFT)<br/>• lsqproject: YES<br/>• shrinkmode: YES"]
-        I --> J["Projected Coordinates (.evec / .eval)<br/>Reconstructs true West Eurasian genomic clines"]
+        direction TB
+        D --> H["File Transformation<br/>PLINK --recode transpose<br/>(.tped & .tfam coordinate files)"]
+        H --> I["Scaffold Definition (pca.par)<br/>• MODERN_SAMPLES.txt (N=625 moderns)<br/>• UNKNOWN_SAMPLES.txt (194 ancient + 25 TAPAS)"]
+        I --> J["EIGENSOFT smartpca execution<br/>• lsqproject: YES (least-squares)<br/>• shrinkmode: YES<br/>• killr2: YES (r2thresh: 0.7)"]
+        J --> K["Unbiased Coordinates (.evec & .eval)<br/>• PC1: 0.53% (East-West cline)<br/>• PC2: 0.31% (North-South cline)<br/>• Resolves true West Eurasian genetic map"]
     end
 
-    subgraph S4["4. Ancestry Deconvolution & Alignment"]
-        D --> K["ADMIXTURE (K=2 through K=6)<br/>• 3 stochastic iterations per K<br/>• Tenfold Cross-Validation (--cv=10)"]
-        K --> L["PONG v1.5<br/>• Integrates 15 run outputs (.Q matrices)<br/>• Resolves multimodality & label switching"]
+    %% Subgraph 4: ADMIXTURE & PONG
+    subgraph S4["4. Ancestry Modeling & Modal Integration"]
+        direction TB
+        D --> L["ADMIXTURE v1.3.0<br/>• K = 2 through 6<br/>• 3 iterations per K (-s $RANDOM)<br/>• 10-fold cross-validation (--cv=10)<br/>• 15 total SLURM batch jobs"]
+        L --> M["PONG v1.5 Setup<br/>• PONG_FILEMAP.txt (runID, K, .Q path)<br/>• PONG_IND2POP.txt (844 sample-to-pop links)<br/>• PONG_POPORDER.txt (chronological order)"]
+        M --> N["PONG Modal Alignment & Merging<br/>• Resolves label switching & multimodality<br/>• Aligns modes across runs (similarity >0.98)<br/>• Web server visualization (port 4000)"]
     end
 
+    %% Subgraph 5: Sample Assignment
     subgraph S5["5. TAPAS Taxonomic Assignment"]
-        J --> M["Joint Integration: Projected PCA + PONG Modes"]
-        L --> M
-        M --> N1["Neolithic / Chalcolithic (UNK_SP_8, 14-18):<br/>EEF + WHG | strictly 0% Steppe"]
-        M --> N2["Bronze / Iron Age (UNK_SP_6, 9, 19-22):<br/>Abrupt ~40% Steppe pastoralist influx"]
-        M --> N3["Historical Genomes (UNK_SP_10-13):<br/>Eastern Mediterranean / North African gene flow"]
-        M --> N4["Modern Controls (UNK_SP_1-5, 7, 24-25):<br/>Pipeline calibration (Basques, Spanish, anchors)"]
+        direction TB
+        K & N --> O["Joint PCA & ADMIXTURE Synthesis<br/>Mapped against Olalde et al. (2019) transect"]
+        O --> P1["Neolithic / Chalcolithic (UNK_SP_8, 14–18)<br/>• High EEF + WHG resurgence<br/>• Strictly 0% Steppe ancestry<br/>• Co-localizes with Spain_MN / Spain_C"]
+        O --> P2["Bronze & Iron Age (UNK_SP_6, 9, 19–22)<br/>• Influx of ~40% Steppe component (purple)<br/>• Shifts rightward in PC1 toward modern Iberians"]
+        O --> P3["Historical / Roman / Islamic (UNK_SP_10–13)<br/>• Introduction of Mediterranean/Near Eastern ancestry<br/>• Positive PC2 shift; matches Spain_Medieval"]
+        O --> P4["Controls & Anchors (UNK_SP_1–5, 7, 24–25)<br/>• UNK_SP_1/2: Pure Basque yellow component<br/>• UNK_SP_24/25: Modern Spaniards<br/>• UNK_SP_3/4/5/7: Finnish, Russian, Turkish, Hungarian"]
     end
 
-    style S1 fill:#f9f9f9,stroke:#333,stroke-width:1px
-    style S2 fill:#fff0f0,stroke:#d9534f,stroke-width:1px
-    style S3 fill:#f0f8ff,stroke:#0275d8,stroke-width:1px
-    style S4 fill:#f0fff0,stroke:#5cb85c,stroke-width:1px
-    style S5 fill:#fffbf0,stroke:#f0ad4e,stroke-width:1px
+    %% Flow links between major stages
+    S1 --> S2
+    S2 --> S3
+    S1 --> S4
+    S3 & S4 --> S5
+
+    %% Stylings
+    classDef default font-family:sans-serif,font-size:11px;
+    style S1 fill:#f8f9fa,stroke:#495057,stroke-width:1.5px
+    style S2 fill:#fff5f5,stroke:#fa5252,stroke-width:1.5px
+    style S3 fill:#e7f5ff,stroke:#228be6,stroke-width:1.5px
+    style S4 fill:#ebfbee,stroke:#40c057,stroke-width:1.5px
+    style S5 fill:#fff9db,stroke:#fab005,stroke-width:1.5px
